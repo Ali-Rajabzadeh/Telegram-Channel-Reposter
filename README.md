@@ -81,7 +81,7 @@ API Hash
 Create a `config.py` file:
 
 ```python
-API_ID = 12345678
+API_ID = "YOUR_API_ID"
 API_HASH = "YOUR_API_HASH"
 
 SOURCE_CHANNEL = "@source_channel"
