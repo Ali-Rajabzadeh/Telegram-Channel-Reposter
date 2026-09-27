@@ -111,15 +111,12 @@ async def main():
 
     async for message in client.iter_messages(source):
 
-        # تبدیل تاریخ پیام Telegram به timezone تهران
+        # Converting Telegram message timestamps to Tehran time zone
         message_date = message.date.astimezone(timezone)
 
-        # اگر پیام مربوط به قبل از امروز است،
-        # چون پیام‌ها از جدید به قدیم می‌آیند، می‌توانیم متوقف شویم.
         if message_date < start_of_day:
             break
 
-        # پیام مربوط به امروز است
         if message_date <= end_of_day:
             messages.append(message)
 
