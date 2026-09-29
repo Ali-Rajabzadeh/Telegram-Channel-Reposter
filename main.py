@@ -1,20 +1,18 @@
+from pathlib import Path
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
-import re
+
 from telethon import TelegramClient
 
-
-from config import (
-    API_ID,
-    API_HASH,
-    SOURCE_CHANNEL,
-    DESTINATION_CHANNEL,
-)
+from config import API_ID, API_HASH, SOURCE_CHANNELS
+from processors import PROCESSORS, FOOTERS
 
 
-# -----------------------------
-# Telegram Client
-# -----------------------------
+# ============================================================
+# Session
+# ============================================================
+
+Path("sessions").mkdir(exist_ok=True)
 
 client = TelegramClient(
     "sessions/user_session",
@@ -23,64 +21,135 @@ client = TelegramClient(
 )
 
 
-# -----------------------------
-# Text Processing
-# -----------------------------
+# ============================================================
+# Process one source channel
+# ============================================================
 
-def remove_usernames(text):
-    if not text:
-        return ""
+async def process_source_channel(
+    source_name,
+    destination_name,
+    processor_name,
+    footer,
+    start_of_day,
+    end_of_day,
+    timezone,
+):
+    print(f"\n{'=' * 60}")
+    print(f"Source: {source_name}")
+    print(f"Processor: {processor_name}")
+    print(f"{'=' * 60}")
 
-    # Delete usernames with @
-    text = re.sub(r'@[A-Za-z0-9_]+', '', text)
+    # --------------------------------------------------------
+    # Get processor
+    # --------------------------------------------------------
 
-    return text
+    processor = PROCESSORS.get(processor_name)
 
-FOOTER = """
-ــــــــــــــــــــــــــــــ
-برای اطلاعات بیشتر با ما در تماس باشید.
-"""
+    if processor is None:
+        print(f"Processor not found: {processor_name}")
+        return
 
-def add_footer(text):
-    if not text:
-        return FOOTER.strip()
+    # --------------------------------------------------------
+    # Get Telegram entities
+    # --------------------------------------------------------
 
-    return text.rstrip() + "\n\n" + FOOTER.strip()
+    try:
+        source = await client.get_entity(source_name)
+        destination = await client.get_entity(destination_name)
 
-def process_text(text):
+    except Exception as e:
+        print(f"Could not resolve channel: {e}")
+        return
 
-    if not text:
-        return ""
+    # --------------------------------------------------------
+    # Get today's messages
+    # --------------------------------------------------------
 
-    text = remove_usernames(text)
-    text = add_footer(text)
+    messages = []
 
-    return text
+    async for message in client.iter_messages(source):
 
-# -----------------------------
+        message_date = message.date.astimezone(timezone)
+
+        # Older than today
+        if message_date < start_of_day:
+            break
+
+        # Today's message
+        if message_date <= end_of_day:
+            messages.append(message)
+
+    # --------------------------------------------------------
+    # Process messages in chronological order
+    # --------------------------------------------------------
+
+    messages.reverse()
+
+    print(f"Found {len(messages)} messages.")
+
+    for message in messages:
+
+        try:
+
+            # =================================================
+            # Text
+            # =================================================
+
+            if message.text and not message.media:
+
+                new_text = processor(message.text, footer)
+
+                if new_text:
+                    await client.send_message(
+                        destination,
+                        new_text,
+                    )
+
+                    print(f"Sent text message: {message.id}")
+
+            # =================================================
+            # Media
+            # =================================================
+
+            elif message.media:
+
+                new_caption = processor(
+                    message.text or "",
+                    footer,
+                )
+
+                try:
+
+                    await client.send_file(
+                        destination,
+                        message.media,
+                        caption=new_caption,
+                    )
+
+                    print(f"Sent media message: {message.id}")
+
+                except Exception as e:
+
+                    print(
+                        f"Skipped message {message.id}: {e}"
+                    )
+
+                    continue
+
+        except Exception as e:
+
+            print(
+                f"Error processing message {message.id}: {e}"
+            )
+
+            continue
+
+
+# ============================================================
 # Main
-# -----------------------------
+# ============================================================
 
 async def main():
-
-    print("Connecting to Telegram...")
-
-    # Get information account
-    me = await client.get_me()
-
-    print(f"Logged in as: {me.first_name}")
-    print(f"Username: @{me.username}")
-
-    # Channels
-    source = await client.get_entity(SOURCE_CHANNEL)
-    destination = await client.get_entity(DESTINATION_CHANNEL)
-
-    print(f"Source: {source.title}")
-    print(f"Destination: {destination.title}")
-
-    # -----------------------------
-    # Today's date
-    # -----------------------------
 
     timezone = ZoneInfo("Asia/Tehran")
 
@@ -98,90 +167,36 @@ async def main():
         tzinfo=timezone,
     )
 
-    print(
-        f"Reading messages from: "
-        f"{start_of_day} → {end_of_day}"
-    )
+    print(f"Today: {now.date()}")
+    print(f"Channels: {len(SOURCE_CHANNELS)}")
 
-    # -----------------------------
-    # Get today's messages
-    # -----------------------------
+    # --------------------------------------------------------
+    # Process all source channels
+    # --------------------------------------------------------
 
-    messages = []
+    for source_name, settings in SOURCE_CHANNELS.items():
 
-    async for message in client.iter_messages(source):
+        destination_name = settings["destination"]
+        processor_name = settings["processor"]
+        footer_name = settings["footer"]
 
-        # Converting Telegram message timestamps to Tehran time zone
-        message_date = message.date.astimezone(timezone)
+        footer = FOOTERS.get(footer_name, "")
 
-        if message_date < start_of_day:
-            break
-
-        if message_date <= end_of_day:
-            messages.append(message)
-
-    # -----------------------------
-    # Process messages
-    # -----------------------------
-
-    for message in messages:
-
-        print(f"Processing message {message.id}")
-
-        # -------------------------
-        # Text only
-        # -------------------------
-
-        if message.text and not message.media:
-
-            new_text = process_text(
-                message.text
-            )
-
-            await client.send_message(
-                destination,
-                new_text,
-            )
-
-        # -------------------------
-        # Photo / Video / File
-        # -------------------------
-
-        elif message.media:
-
-            new_caption = process_text(
-                message.text or ""
-            )
-
-            try:
-                await client.send_file(
-                    destination,
-                    message.media,
-                    caption=new_caption,
-                )
-
-            except Exception as e:
-                print(
-                    f"Skipped message {message.id}: {e}"
-                )
-                continue
-
-        # -------------------------
-        # Other messages
-        # -------------------------
-
-        else:
-
-            print(
-                f"Skipped message {message.id}"
-            )
-
-    print("Done.")
+        await process_source_channel(
+            source_name=source_name,
+            destination_name=destination_name,
+            processor_name=processor_name,
+            footer=footer,
+            start_of_day=start_of_day,
+            end_of_day=end_of_day,
+            timezone=timezone,
+        )
 
 
-# -----------------------------
+# ============================================================
 # Run
-# -----------------------------
+# ============================================================
 
 with client:
+
     client.loop.run_until_complete(main())
